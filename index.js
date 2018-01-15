@@ -78,21 +78,17 @@ Tree.prototype._put = function (head, seq, names, value, cb) {
     debug('short-circuit')
 
     // names and _lastNames differ only on their last element
-    try {
-      index = this._lastIndex.map(i => {
-        if (i.length === len - 1) {
-          return i.concat([len])
-        } else if (i.length === 1) {
-          return [len]
-        } else {
-          throw new Error('Unexpected')
-        }
-      })
-      this._lastNames = names
-      this._lastIndex = index
-      this._appendNode(names, value, index, cb)
-      return
-    } catch (e) {}
+    index = this._lastIndex.map(i => {
+      if (i.length === 1) {
+        return [len]
+      } else {
+        return i.concat([len])
+      }
+    })
+    this._lastNames = names
+    this._lastIndex = index
+    this._appendNode(names, value, index, cb)
+    return
   }
 
   loop(null, null, null)
@@ -132,9 +128,17 @@ Tree.prototype._appendNode = function (names, value, index, cb) {
   }
   var encodedNode = messages.Node.encode(node)
 
-  debug('appending node to hypercore, %d bytes', encodedNode.length)
+  debug('appending node to hypercore, %d bytes: %s',
+    encodedNode.length, index
+      .map(i => '[' + i.length + '...' + i[i.length - 1] + ']')
+      .join(','))
   this.version = this.feed.length
   this.feed.append(encodedNode, cb)
+}
+
+Tree.prototype._clearIndexCache = function () {
+  this._lastNames = null
+  this._lastIndex = null
 }
 
 Tree.prototype.list = function (name, opts, cb) {
@@ -283,6 +287,7 @@ Tree.prototype._del = function (head, seq, names, cb) {
 
         self.version = self.feed.length
         self.feed.append(messages.Node.encode(node), cb)
+        self._clearIndexCache()
         return
       }
 
@@ -588,6 +593,7 @@ Tree.prototype._init = function (names, value, cb) {
 
   this.version = this.feed.length
   this.feed.append(messages.Node.encode(node), cb)
+  this._clearIndexCache()
 }
 
 Tree.prototype._getAndDecode = function (seq, opts, cb) {
