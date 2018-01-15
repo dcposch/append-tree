@@ -27,6 +27,9 @@ function Tree (feed, opts) {
   this._asNode = !!opts.node
   this._readonly = !!opts.readonly
 
+  this._lastNames = null
+  this._lastIndex = null
+
   this.feed = feed
   this.version = this._head
 
@@ -68,7 +71,29 @@ Tree.prototype._put = function (head, seq, names, value, cb) {
   var index = []
   var len = self.feed.length
 
-  // TODO: don't always loop(), short-circuit the O(n^2) problem
+  // Don't always loop(), partly avoid the O(n^2) problem
+  if (this._lastNames != null &&
+    names.length === this._lastNames.length &&
+    compare(names, this._lastNames) === names.length - 1) {
+    debug('short-circuit')
+
+    // names and _lastNames differ only on their last element
+    try {
+      index = this._lastIndex.map(i => {
+        if (i.length === len - 1) {
+          return i.concat([len])
+        } else if (i.length === 1) {
+          return [len]
+        } else {
+          throw new Error('Unexpected')
+        }
+      })
+      this._lastNames = names
+      this._lastIndex = index
+      this._appendNode(names, value, index, cb)
+      return
+    } catch (e) {}
+  }
 
   loop(null, null, null)
 
@@ -89,22 +114,27 @@ Tree.prototype._put = function (head, seq, names, value, cb) {
     }
 
     if (i === end) {
-      var node = {
-        name: join(names),
-        value: self._codec.encode(value),
-        paths: self._deflate(len, index)
-      }
-      var encodedNode = messages.Node.encode(node)
-
-      debug('appending node to hypercore, %d bytes', encodedNode.length)
-
-      self.version = self.feed.length
-      self.feed.append(encodedNode, cb)
+      self._lastNames = names
+      self._lastIndex = index
+      self._appendNode(names, value, index, cb)
       return
     }
 
     self._list(head, seq, names.slice(0, i++), null, loop)
   }
+}
+
+Tree.prototype._appendNode = function (names, value, index, cb) {
+  var node = {
+    name: join(names),
+    value: this._codec.encode(value),
+    paths: this._deflate(this.feed.length, index)
+  }
+  var encodedNode = messages.Node.encode(node)
+
+  debug('appending node to hypercore, %d bytes', encodedNode.length)
+  this.version = this.feed.length
+  this.feed.append(encodedNode, cb)
 }
 
 Tree.prototype.list = function (name, opts, cb) {
