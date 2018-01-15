@@ -7,6 +7,7 @@ var inherits = require('inherits')
 var events = require('events')
 var cache = require('array-lru')
 var nextTick = require('process-nextick-args')
+var debug = require('debug')('append-tree')
 
 module.exports = Tree
 
@@ -56,12 +57,18 @@ Tree.prototype.put = function (name, value, cb) {
   })
 }
 
+// Puts `names` => `value` into the tree.
+// WARNING: this method runs in O(n) time AND adds O(n) data to the feed,
+// where n is the number of elements you've written so far!
+// This means that adding n elements to append-tree takes O(n^2) time and space.
 Tree.prototype._put = function (head, seq, names, value, cb) {
   var self = this
   var i = 0
   var end = names.length + 1
   var index = []
   var len = self.feed.length
+
+  // TODO: don't always loop(), short-circuit the O(n^2) problem
 
   loop(null, null, null)
 
@@ -87,9 +94,12 @@ Tree.prototype._put = function (head, seq, names, value, cb) {
         value: self._codec.encode(value),
         paths: self._deflate(len, index)
       }
+      var encodedNode = messages.Node.encode(node)
+
+      debug('appending node to hypercore, %d bytes', encodedNode.length)
 
       self.version = self.feed.length
-      self.feed.append(messages.Node.encode(node), cb)
+      self.feed.append(encodedNode, cb)
       return
     }
 
@@ -119,7 +129,9 @@ Tree.prototype.list = function (name, opts, cb) {
       for (var i = 0; i < nodes.length; i++) {
         var nodeNames = split(nodes[i].name)
         if (nodeNames.length > names.length) {
-          list.push(ns ? self._node(nodes[i], seqs[i]) : nodeNames[names.length])
+          list.push(
+            ns ? self._node(nodes[i], seqs[i]) : nodeNames[names.length]
+          )
         }
       }
 
@@ -136,7 +148,9 @@ Tree.prototype._list = function (head, seq, names, opts, cb) {
   var closest = cmp === names.length
 
   if (!closest) {
-    if (!index || !index.length || (index.length === 1 && index[0] === seq)) return cb(null, [], [])
+    if (!index || !index.length || (index.length === 1 && index[0] === seq)) {
+      return cb(null, [], [])
+    }
     this._closer(names, cmp, index, opts, cb)
     return
   }
@@ -251,7 +265,7 @@ Tree.prototype._del = function (head, seq, names, cb) {
       if (err) return cb(err)
 
       for (var i = nodes.length - 1; i >= 0; i--) {
-        if (nodes[i].name !== ignore && nodes[i].value) return cb(null, nodes[i], seqs[i])
+        if (nodes[i].name !== ignore && nodes[i].value) { return cb(null, nodes[i], seqs[i]) }
       }
 
       if (j <= 0) {
@@ -351,15 +365,18 @@ Tree.prototype._closer = function (names, cmp, index, opts, cb) {
 
 Tree.prototype.head = function (opts, cb) {
   if (typeof opts === 'function') return this.head(null, opts)
-  if (this._head >= this._offset) return this._getAndDecode(this._head, opts, cb)
+  if (this._head >= this._offset) {
+    return this._getAndDecode(this._head, opts, cb)
+  }
   if (this._readonly) return cb(null, null, -1)
 
   var self = this
 
   this.ready(function (err) {
     if (err) return cb(err)
-    if (self.feed.length > self._offset) self._getAndDecode(self.feed.length - 1, opts, cb)
-    else cb(null, null, -1)
+    if (self.feed.length > self._offset) {
+      self._getAndDecode(self.feed.length - 1, opts, cb)
+    } else cb(null, null, -1)
   })
 }
 
@@ -368,7 +385,12 @@ Tree.prototype.ready = function (cb) {
 
   this.feed.ready(function (err) {
     if (err) return cb(err)
-    if ((self.version === -1 || self._head === -1) && self.feed.length > self._offset) self.version = self.feed.length - 1
+    if (
+      (self.version === -1 || self._head === -1) &&
+      self.feed.length > self._offset
+    ) {
+      self.version = self.feed.length - 1
+    }
     cb(null)
   })
 }
@@ -393,6 +415,8 @@ Tree.prototype.history = function (opts) {
 }
 
 Tree.prototype.diff = function (toTree, opts) {
+  debug('diffing')
+
   if (typeof toTree === 'number') toTree = this.checkout(toTree)
   opts = this._defaultOpts(opts)
 
@@ -462,17 +486,22 @@ Tree.prototype.diff = function (toTree, opts) {
   }
 
   function parseDir (dir, name) {
-    return '/' + split(name).slice(0, split(dir).length + 1).join('/')
+    return (
+      '/' +
+      split(name)
+        .slice(0, split(dir).length + 1)
+        .join('/')
+    )
   }
 
   function visit (dir, cb) {
     var visited = {}
 
-    toTree.list(dir, {node: true}, function (err, a) {
+    toTree.list(dir, { node: true }, function (err, a) {
       if (err && !err.notFound) return cb(err)
       if (!a) a = []
 
-      fromTree.list(dir, {node: true}, function (err, b) {
+      fromTree.list(dir, { node: true }, function (err, b) {
         if (err && !err.notFound) return cb(err)
         if (!b) b = []
 
@@ -536,7 +565,9 @@ Tree.prototype._getAndDecode = function (seq, opts, cb) {
 
   var self = this
   var cached = this._cache && this._cache.get(seq)
-  if (cached) return nextTick(cb, null, cached, seq)
+  if (cached) {
+    return nextTick(cb, null, cached, seq)
+  }
 
   this.feed.get(seq, opts, function (err, value) {
     if (err) return cb(err)
@@ -612,7 +643,9 @@ Tree.prototype._deflate = function (seq, index) {
     }
   }
 
-  if (offset > buf.length) throw new Error('Assert error: buffer length too small')
+  if (offset > buf.length) {
+    throw new Error('Assert error: buffer length too small')
+  }
   return buf.slice(0, offset)
 }
 
@@ -647,7 +680,9 @@ Tree.prototype._inflate = function (seq, buf) {
 }
 
 Tree.prototype._defaultOpts = function (opts) {
-  if (!opts) return {wait: this._wait, cached: this._cached, node: this._asNode}
+  if (!opts) {
+    return { wait: this._wait, cached: this._cached, node: this._asNode }
+  }
   if (opts.wait === undefined) opts.wait = this._wait
   if (opts.cached === undefined) opts.cached = this._cached
   if (opts.node === undefined) opts.noce = this._asNode
@@ -672,6 +707,8 @@ function notFound (names) {
   return err
 }
 
+// Returns the first index on which a and b don't match,
+// or a.length if they both match until
 function compare (a, b) {
   var idx = 0
   while (idx < a.length && a[idx] === b[idx]) idx++
@@ -689,7 +726,7 @@ function getCache (opts) {
   if (opts.cache === false) return null
   if (opts.cache === true || !opts.cache) {
     var cacheSize = opts.cacheSize || 65536
-    return cache(cacheSize, {indexedValues: true})
+    return cache(cacheSize, { indexedValues: true })
   }
   return opts.cache
 }
